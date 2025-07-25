@@ -58,7 +58,7 @@ jobs:
           TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           echo "Running custom Docker build script"
-          bash build.sh docker
+          BUILD_EDGE=1 BUILD_TAG_VERSION=1 bash build.sh
 
           if [ "${{ github.event_name }}" != "pull_request" ]; then
             for tag in $TAGS; do
