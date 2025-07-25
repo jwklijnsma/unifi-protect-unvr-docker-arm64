@@ -10,12 +10,12 @@ on:
     branches: [ "main" ]
 
 env:
-  REGISTRY: docker.io
-  IMAGE_NAME: dciancu/unifi-protect-unvr-docker-arm64
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
@@ -27,45 +27,54 @@ jobs:
 
       - name: Install cosign
         if: github.event_name != 'pull_request'
-        uses: sigstore/cosign-installer@v3.5.0
+        uses: sigstore/cosign-installer@59acb6260d9c0ba8f4a2f9d9b48431a222b68e20
         with:
           cosign-release: 'v2.2.4'
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226
 
-      - name: Log into DockerHub
+      - name: Log into registry ${{ env.REGISTRY }}
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@343f7c4344506bcbf9b4de18042ae17996df046d
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@96383f45573cb7f253c731d3b3ab81c87ef81934
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
 
       - name: Build Docker image with custom script
         id: build-and-push
         env:
           BUILD_EDGE: 1
           BUILD_TAG_VERSION: 1
-          IMAGE_FULL_TAG: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:edge
+          REGISTRY: ${{ env.REGISTRY }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          TAGS: ${{ steps.meta.outputs.tags }}
         run: |
-          echo "Building Docker image: $IMAGE_FULL_TAG"
+          echo "Running custom Docker build script"
           bash build.sh docker
 
           if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "Pushing image: $IMAGE_FULL_TAG"
-            docker push "$IMAGE_FULL_TAG"
+            for tag in $TAGS; do
+              docker tag my-image-name "$tag"
+              docker push "$tag"
+            done
 
-            # Extract image digest
-            DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE_FULL_TAG" | cut -d@ -f2)
+            # Get digest for cosign
+            DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' my-image-name | cut -d@ -f2)
             echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Sign the published Docker image
         if: ${{ github.event_name != 'pull_request' }}
         env:
-          IMAGE_FULL_TAG: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:edge
+          TAGS: ${{ steps.meta.outputs.tags }}
           DIGEST: ${{ steps.build-and-push.outputs.digest }}
         run: |
-          echo "Signing image: $IMAGE_FULL_TAG@$DIGEST"
-          cosign sign --yes "$IMAGE_FULL_TAG@$DIGEST"
+          echo "$TAGS" | xargs -I {} cosign sign --yes {}@${DIGEST}
